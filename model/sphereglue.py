@@ -37,7 +37,8 @@ class KeypointEncoder(nn.Module):
         nn.init.constant_(self.kpt_encoder[-1].bias, 0.0)
 
     def forward(self, descriptor, kpts, scores):
-        inputs = [descriptor.transpose(1,2), kpts.transpose(1,2), scores.unsqueeze(1)]
+        inputs = [descriptor, kpts.transpose(1,2), scores.unsqueeze(1)]
+        # print (descriptor.shape,kpts.shape,scores.shape)
         out = self.kpt_encoder(torch.cat(inputs, dim=1))
         return out
 
@@ -171,9 +172,9 @@ class SphereGlue(nn.Module):
 
     def forward(self, data):
         """Run ChebGlue on a pair of keypoints and descriptors"""
-        desc1, desc2 = data['h1'], data['h2']
-        kpts1, kpts2 = data['unitCartesian1'], data['unitCartesian2']
-        scores1, scores2 = data['scores1'], data['scores2']
+        desc1, desc2 = data['descriptors0'], data['descriptors1']
+        kpts1, kpts2 = data['unitCartesian0'], data['unitCartesian1']
+        scores1, scores2 = data['scores0'], data['scores1']
 
         if kpts1.shape[1] == 0 or kpts2.shape[1] == 0:  # no keypoints
             shape1, shape2 = kpts1.shape[:-1], kpts2.shape[:-1]
@@ -215,16 +216,22 @@ class SphereGlue(nn.Module):
         max1, max2 = scores[:, :-1, :-1].max(2), scores[:, :-1, :-1].max(1)
         indices1, indices2 = max1.indices, max2.indices
         mutual1 = arange_like(indices1, 1)[None] == indices2.gather(1, indices1)
+        mutual2 = arange_like(indices2, 1)[None] == indices1.gather(1, indices2)
         zero = scores.new_tensor(0)
         mscores1 = torch.where(mutual1, max1.values.exp(), zero)
+        mscores2 = torch.where(mutual2, max2.values.exp(), zero)
         valid1 = mutual1 & (mscores1 > self.config['match_threshold'])
+        valid2 = mutual2 & (mscores2 > self.config['match_threshold'])
         indices1 = torch.where(valid1, indices1, indices1.new_tensor(-1))
+        indices2 = torch.where(valid2, indices2, indices2.new_tensor(-1))
 
         return {
             'context_descriptors0': mdesc1,
             'context_descriptors1': mdesc2,
             'scores': scores,
-            'matches0': indices1,  # use -1 for invalid match
+            'matches0': indices1,
+            'matches1': indices2,  # use -1 for invalid match
             'matching_scores0': mscores1,
+            'matching_scores1': mscores2,
         }
 
